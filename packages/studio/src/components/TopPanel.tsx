@@ -98,6 +98,7 @@ const TopPanelInner: React.FC<{
 			flex: 1,
 			display: 'flex',
 			minHeight: 0,
+			overflow: 'hidden',
 			position: 'relative',
 			paddingTop: rulersAreVisible ? RULER_WIDTH : 0,
 			paddingLeft: rulersAreVisible ? RULER_WIDTH : 0,

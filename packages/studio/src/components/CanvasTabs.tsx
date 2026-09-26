@@ -150,7 +150,6 @@ const container: React.CSSProperties = {
 	overflowY: 'hidden',
 	overscrollBehaviorX: 'none',
 	position: 'relative',
-	zIndex: 1,
 };
 
 const tabWrapperStyle: React.CSSProperties = {
