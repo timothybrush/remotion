@@ -11,4 +11,4 @@ const timelineLeftEdgeCursorSvg = `<svg width="24" height="24" viewBox="0 0 32 3
 </defs>
 </svg>`;
 
-export const timelineLeftEdgeCursor = `url("data:image/svg+xml,${encodeURIComponent(timelineLeftEdgeCursorSvg)}") 12 12`;
+export const timelineLeftEdgeCursor = `url("data:image/svg+xml,${encodeURIComponent(timelineLeftEdgeCursorSvg)}") 2.25 12`;

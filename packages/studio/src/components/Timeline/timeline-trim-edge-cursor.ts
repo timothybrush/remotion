@@ -1,4 +1,4 @@
-const timelineRippleEdgeCursorSvg = `<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+const timelineTrimEdgeCursorSvg = `<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g filter="url(#shadow)">
 <path d="M7 4.5H11C12.1 4.5 13 5.4 13 6.5V25.5C13 26.6 12.1 27.5 11 27.5H7M25 4.5H21C19.9 4.5 19 5.4 19 6.5V25.5C19 26.6 19.9 27.5 21 27.5H25" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
 <path d="M7 4.5H11C12.1 4.5 13 5.4 13 6.5V25.5C13 26.6 12.1 27.5 11 27.5H7M25 4.5H21C19.9 4.5 19 5.4 19 6.5V25.5C19 26.6 19.9 27.5 21 27.5H25" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -10,4 +10,4 @@ const timelineRippleEdgeCursorSvg = `<svg width="24" height="24" viewBox="0 0 32
 </defs>
 </svg>`;
 
-export const timelineRippleEdgeCursor = `url("data:image/svg+xml,${encodeURIComponent(timelineRippleEdgeCursorSvg)}") 12 12`;
+export const timelineTrimEdgeCursor = `url("data:image/svg+xml,${encodeURIComponent(timelineTrimEdgeCursorSvg)}") 12 12`;
