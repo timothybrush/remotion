@@ -64,7 +64,6 @@ import {getCurrentFrame} from './imperative-state';
 import {LoopedTimelineIndicator} from './LoopedTimelineIndicators';
 import {splitSelectedTimelineItems} from './split-selected-timeline-item';
 import {getTimelineAssetLinkInfo} from './timeline-asset-link';
-import {normalizeTimelineNumber} from './timeline-field-utils';
 import {timelineLeftEdgeCursor} from './timeline-left-edge-cursor';
 import {timelineRightEdgeCursor} from './timeline-right-edge-cursor';
 import {timelineRippleEdgeCursor} from './timeline-ripple-edge-cursor';
@@ -602,18 +601,7 @@ const TimelineSequenceInner: React.FC<{
 	);
 	const volumeKeyframeStatus = useMemo(() => {
 		if (volumeDragOverride?.type === 'keyframed') {
-			return {
-				...volumeDragOverride.status,
-				keyframes: volumeDragOverride.status.keyframes.map((keyframe) => ({
-					...keyframe,
-					// Fractional frames are valid. Only remove floating-point noise
-					// from the transient values before drawing the curve.
-					value:
-						typeof keyframe.value === 'number'
-							? normalizeTimelineNumber(keyframe.value)
-							: keyframe.value,
-				})),
-			};
+			return volumeDragOverride.status;
 		}
 
 		return propStatusesForOverride?.volume?.status === 'keyframed'
