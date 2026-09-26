@@ -101,23 +101,76 @@ const NEGATIVE_START_BORDER_WIDTH = 1;
 const EDGE_DRAG_HIGHLIGHT_WIDTH = 12;
 const MIN_SECONDARY_LEFT_EDGE_ACTION_WIDTH = 32;
 
+type RippleEditHighlightEdge = 'left' | 'right';
+
 type RippleEditHighlight = {
 	readonly sequenceId: TSequence['id'];
-	readonly edge: 'left' | 'right';
+	readonly edge: RippleEditHighlightEdge;
 };
 
 const TimelineRippleEditHighlightContext = React.createContext<{
-	readonly highlight: RippleEditHighlight | null;
-	readonly setHighlight: React.Dispatch<
-		React.SetStateAction<RippleEditHighlight | null>
-	>;
+	readonly register: (
+		sequenceId: TSequence['id'],
+		listener: React.Dispatch<
+			React.SetStateAction<RippleEditHighlightEdge | null>
+		>,
+	) => () => void;
+	readonly setHighlight: (highlight: RippleEditHighlight | null) => void;
 } | null>(null);
 
 export const TimelineRippleEditHighlightProvider: React.FC<{
 	readonly children: React.ReactNode;
 }> = ({children}) => {
-	const [highlight, setHighlight] = useState<RippleEditHighlight | null>(null);
-	const value = useMemo(() => ({highlight, setHighlight}), [highlight]);
+	// Keep the context value stable so highlighting one boundary does not
+	// re-render every timeline sequence through a context broadcast.
+	const value = useMemo(() => {
+		let highlight: RippleEditHighlight | null = null;
+		const listeners = new Map<
+			TSequence['id'],
+			React.Dispatch<React.SetStateAction<RippleEditHighlightEdge | null>>
+		>();
+
+		return {
+			register: (
+				sequenceId: TSequence['id'],
+				listener: React.Dispatch<
+					React.SetStateAction<RippleEditHighlightEdge | null>
+				>,
+			) => {
+				listeners.set(sequenceId, listener);
+				if (highlight?.sequenceId === sequenceId) {
+					listener(highlight.edge);
+				}
+
+				return () => {
+					if (listeners.get(sequenceId) === listener) {
+						listeners.delete(sequenceId);
+					}
+				};
+			},
+			setHighlight: (nextHighlight: RippleEditHighlight | null) => {
+				if (
+					highlight?.sequenceId === nextHighlight?.sequenceId &&
+					highlight?.edge === nextHighlight?.edge
+				) {
+					return;
+				}
+
+				const previousHighlight = highlight;
+				highlight = nextHighlight;
+				if (
+					previousHighlight &&
+					previousHighlight.sequenceId !== nextHighlight?.sequenceId
+				) {
+					listeners.get(previousHighlight.sequenceId)?.(null);
+				}
+
+				if (nextHighlight) {
+					listeners.get(nextHighlight.sequenceId)?.(nextHighlight.edge);
+				}
+			},
+		};
+	}, []);
 
 	return (
 		<TimelineRippleEditHighlightContext.Provider value={value}>
@@ -514,7 +567,9 @@ const TimelineSequenceInner: React.FC<{
 	const mediaDurationDragLimitsRegistry = useContext(
 		TimelineSequenceMediaDurationDragLimitsContext,
 	);
-	const rippleEditHighlight = useContext(TimelineRippleEditHighlightContext);
+	const rippleEditHighlightController = useContext(
+		TimelineRippleEditHighlightContext,
+	);
 	const dragAwareDoubleClick = useMemo(
 		() => createDragAwareDoubleClickTracker(),
 		[],
@@ -522,6 +577,14 @@ const TimelineSequenceInner: React.FC<{
 	const [activeTrimEdge, setActiveTrimEdge] = useState<'left' | 'right' | null>(
 		null,
 	);
+	const [rippleEditHighlightEdge, setRippleEditHighlightEdge] =
+		useState<RippleEditHighlightEdge | null>(null);
+	useEffect(() => {
+		return rippleEditHighlightController?.register(
+			s.id,
+			setRippleEditHighlightEdge,
+		);
+	}, [rippleEditHighlightController, s.id]);
 	const cascadingSequenceComponentIdentity = isCascadingSequence(s)
 		? s.controls?.componentIdentity
 		: null;
@@ -549,7 +612,7 @@ const TimelineSequenceInner: React.FC<{
 		(edge: 'left' | 'right', highlightAdjacent: boolean) => {
 			setActiveTrimEdge(edge);
 			if (!highlightAdjacent) {
-				rippleEditHighlight?.setHighlight(null);
+				rippleEditHighlightController?.setHighlight(null);
 				return;
 			}
 
@@ -557,7 +620,7 @@ const TimelineSequenceInner: React.FC<{
 				edge === 'left'
 					? adjacentCascadingSequences.previous
 					: adjacentCascadingSequences.next;
-			rippleEditHighlight?.setHighlight(
+			rippleEditHighlightController?.setHighlight(
 				adjacent
 					? {
 							sequenceId: adjacent.id,
@@ -566,7 +629,7 @@ const TimelineSequenceInner: React.FC<{
 					: null,
 			);
 		},
-		[adjacentCascadingSequences, rippleEditHighlight],
+		[adjacentCascadingSequences, rippleEditHighlightController],
 	);
 	const startLeftEdgeDrag = useCallback(
 		(mode: 'ripple' | 'source-only' | 'self-trim') =>
@@ -580,10 +643,10 @@ const TimelineSequenceInner: React.FC<{
 	const endEdgeDrag = useCallback(
 		(wasDragged: boolean) => {
 			setActiveTrimEdge(null);
-			rippleEditHighlight?.setHighlight(null);
+			rippleEditHighlightController?.setHighlight(null);
 			dragAwareDoubleClick.endPointerGesture(wasDragged);
 		},
-		[dragAwareDoubleClick, rippleEditHighlight],
+		[dragAwareDoubleClick, rippleEditHighlightController],
 	);
 
 	const mediaMetadata = useMediaMetadata(
@@ -1249,12 +1312,7 @@ const TimelineSequenceInner: React.FC<{
 	const sequence = (
 		<TimelineSequenceCurrentFrame
 			s={s}
-			activeTrimEdge={
-				activeTrimEdge ??
-				(rippleEditHighlight?.highlight?.sequenceId === s.id
-					? rippleEditHighlight.highlight.edge
-					: null)
-			}
+			activeTrimEdge={activeTrimEdge ?? rippleEditHighlightEdge}
 			displayDurationInFrames={displayDurationInFrames}
 			premount={visibleLayout.premount}
 			postmount={visibleLayout.postmount}
