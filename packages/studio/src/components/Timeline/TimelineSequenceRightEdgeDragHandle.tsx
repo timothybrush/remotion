@@ -213,14 +213,7 @@ export type TimelineSequenceLeftEdgeDragTarget = {
 	readonly nodePath: SequencePropsSubscriptionKey;
 	readonly playbackRate: number;
 	readonly positionField: 'from' | null;
-	readonly rollingPrevious: {
-		readonly fileName: string;
-		readonly initialDuration: number;
-		readonly minimumDuration: number;
-		readonly nodePath: SequencePropsSubscriptionKey;
-		readonly playbackRate: number;
-		readonly schema: InteractivitySchema;
-	} | null;
+	readonly ripplePrevious: TimelineSequenceDurationDragTarget | null;
 	readonly schema: InteractivitySchema;
 };
 
@@ -474,19 +467,14 @@ export const getTimelineSequenceLeftEdgeDragDelta = ({
 	deltaFrames,
 	playbackRate,
 	minimumDuration = 1,
-	minimumDeltaFrames = -Infinity,
 }: {
 	readonly initialDuration: number;
 	readonly initialTrimBefore: number;
 	readonly deltaFrames: number;
 	readonly playbackRate: number;
 	readonly minimumDuration?: number;
-	readonly minimumDeltaFrames?: number;
 }) => {
-	const minDeltaFrames = Math.max(
-		minimumDeltaFrames,
-		-initialTrimBefore / playbackRate,
-	);
+	const minDeltaFrames = -initialTrimBefore / playbackRate;
 	const maxDeltaFrames = initialDuration - minimumDuration;
 
 	return Math.max(minDeltaFrames, Math.min(deltaFrames, maxDeltaFrames));
@@ -499,7 +487,6 @@ export const getTimelineSequenceLeftEdgeDragValues = ({
 	deltaFrames,
 	playbackRate,
 	minimumDuration = 1,
-	minimumDeltaFrames = -Infinity,
 	trimBeforeOnly = false,
 }: {
 	readonly initialDuration: number;
@@ -508,7 +495,6 @@ export const getTimelineSequenceLeftEdgeDragValues = ({
 	readonly deltaFrames: number;
 	readonly playbackRate: number;
 	readonly minimumDuration?: number;
-	readonly minimumDeltaFrames?: number;
 	readonly trimBeforeOnly?: boolean;
 }) => {
 	const clampedDeltaFrames = trimBeforeOnly
@@ -519,7 +505,6 @@ export const getTimelineSequenceLeftEdgeDragValues = ({
 				deltaFrames,
 				playbackRate,
 				minimumDuration,
-				minimumDeltaFrames,
 			});
 
 	return {
@@ -545,6 +530,31 @@ export const getTimelineSequenceLeftEdgeDragChanges = ({
 	readonly trimBeforeOnly?: boolean;
 }): SaveSequencePropChange[] => {
 	return targets.flatMap((target) => {
+		if (target.ripplePrevious && !trimBeforeOnly) {
+			const previous = target.ripplePrevious;
+			const nextDuration = getTimelineSequenceDurationDragValue({
+				initialDuration: previous.initialDuration,
+				deltaFrames: deltaFrames * previous.parentPlaybackRate,
+				maximumDuration: previous.maximumDuration,
+				minimumDuration: previous.minimumDuration,
+			});
+			return nextDuration === previous.initialDuration
+				? []
+				: [
+						{
+							fileName: previous.fileName,
+							nodePath: previous.nodePath,
+							fieldKey: previous.endField.fieldKey,
+							value: getTimelineSequenceEndFieldValue({
+								endField: previous.endField,
+								durationInFrames: nextDuration,
+							}),
+							defaultValue: null,
+							schema: previous.schema,
+						},
+					];
+		}
+
 		const nextValues = getTimelineSequenceLeftEdgeDragValues({
 			initialDuration: target.initialDuration,
 			initialFrom: target.initialFrom,
@@ -552,29 +562,9 @@ export const getTimelineSequenceLeftEdgeDragChanges = ({
 			deltaFrames: deltaFrames * target.parentPlaybackRate,
 			playbackRate: target.playbackRate,
 			minimumDuration: target.minimumDuration,
-			minimumDeltaFrames: target.rollingPrevious
-				? target.rollingPrevious.minimumDuration -
-					target.rollingPrevious.initialDuration
-				: -Infinity,
 			trimBeforeOnly,
 		});
 		const changes: SaveSequencePropChange[] = [];
-		if (target.rollingPrevious && !trimBeforeOnly) {
-			const previous = target.rollingPrevious;
-			const nextDuration =
-				previous.initialDuration +
-				(target.initialDuration - nextValues.durationInFrames);
-			if (nextDuration !== previous.initialDuration) {
-				changes.push({
-					fileName: previous.fileName,
-					nodePath: previous.nodePath,
-					fieldKey: 'durationInFrames',
-					value: nextDuration * previous.playbackRate,
-					defaultValue: null,
-					schema: previous.schema,
-				});
-			}
-		}
 
 		if (
 			target.positionField !== null &&
@@ -970,6 +960,7 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 	sequences,
 	overrideIdsToNodePaths,
 	propStatuses,
+	timelineDurationInFrames = Infinity,
 	trimBeforeOnly = false,
 }: {
 	readonly draggedNodePathInfo: SequenceNodePathInfo;
@@ -977,6 +968,7 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 	readonly sequences: TSequence[];
 	readonly overrideIdsToNodePaths: OverrideIdToNodePaths;
 	readonly propStatuses: PropStatuses;
+	readonly timelineDurationInFrames?: number;
 	readonly trimBeforeOnly?: boolean;
 }): TimelineSequenceLeftEdgeDragTarget[] | null => {
 	const draggedSelectionKey =
@@ -998,11 +990,17 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 		return null;
 	}
 
-	const targetNodePathInfos =
-		draggedItemIsSelected && selectedSequenceItems.length > 1
-			? selectedSequenceItems.map((item) => item.nodePathInfo)
-			: [draggedNodePathInfo];
 	const tracks = calculateTimeline({sequences, overrideIdsToNodePaths});
+	const draggedTrack = findSequenceTrack({
+		tracks,
+		nodePathInfo: draggedNodePathInfo,
+	});
+	const targetNodePathInfos =
+		!trimBeforeOnly && draggedTrack && isSeriesSequence(draggedTrack.sequence)
+			? [draggedNodePathInfo]
+			: draggedItemIsSelected && selectedSequenceItems.length > 1
+				? selectedSequenceItems.map((item) => item.nodePathInfo)
+				: [draggedNodePathInfo];
 	const targets = new Map<string, TimelineSequenceLeftEdgeDragTarget>();
 
 	for (const nodePathInfo of targetNodePathInfos) {
@@ -1026,14 +1024,62 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 			return null;
 		}
 
+		let ripplePrevious: TimelineSequenceLeftEdgeDragTarget['ripplePrevious'] =
+			null;
+		if (
+			!trimBeforeOnly &&
+			targetNodePathInfos.length === 1 &&
+			isSeriesSequence(originalSequence)
+		) {
+			const siblings = sortItemsByCommitOrder(
+				sequences.filter(
+					(candidate) =>
+						candidate.parent === originalSequence.parent &&
+						isSeriesSequence(candidate),
+				),
+				(candidate) => candidate.timelineOrder,
+			);
+			const previous =
+				siblings[
+					siblings.findIndex(
+						(candidate) => candidate.id === originalSequence.id,
+					) - 1
+				];
+			if (previous) {
+				const previousTrack = tracks.find(
+					(candidate) => candidate.sequence.id === previous.id,
+				);
+				if (!previousTrack?.nodePathInfo) {
+					return null;
+				}
+
+				ripplePrevious =
+					getTimelineSequenceDurationDragTargets({
+						draggedNodePathInfo: previousTrack.nodePathInfo,
+						draggedSequenceMediaDurationDragLimits: null,
+						selectedSequenceMediaDurationDragLimits: null,
+						selectedItems: [],
+						sequences,
+						overrideIdsToNodePaths,
+						propStatuses,
+						timelineDurationInFrames,
+					})?.[0] ?? null;
+				if (!ripplePrevious) {
+					return null;
+				}
+			}
+		}
+
 		const positionField = isCascadingSequence(originalSequence) ? null : 'from';
 		if (
-			(!trimBeforeOnly &&
+			(!ripplePrevious &&
+				!trimBeforeOnly &&
 				positionField === 'from' &&
 				!canUpdateFrom({propStatuses, nodePath})) ||
-			(!trimBeforeOnly &&
+			(!ripplePrevious &&
+				!trimBeforeOnly &&
 				!canUpdateDurationInFrames({propStatuses, nodePath})) ||
-			!canUpdateTrimBefore({propStatuses, nodePath})
+			(!ripplePrevious && !canUpdateTrimBefore({propStatuses, nodePath}))
 		) {
 			return null;
 		}
@@ -1062,62 +1108,6 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 				runtimeValues,
 			});
 			const runtimeDuration = runtimeValues.durationInFrames;
-			let rollingPrevious: TimelineSequenceLeftEdgeDragTarget['rollingPrevious'] =
-				null;
-			if (
-				!trimBeforeOnly &&
-				targetNodePathInfos.length === 1 &&
-				isSeriesSequence(originalSequence)
-			) {
-				const siblings = sortItemsByCommitOrder(
-					sequences.filter(
-						(candidate) =>
-							candidate.parent === originalSequence.parent &&
-							isSeriesSequence(candidate),
-					),
-					(candidate) => candidate.timelineOrder,
-				);
-				const previous =
-					siblings[
-						siblings.findIndex(
-							(candidate) => candidate.id === originalSequence.id,
-						) - 1
-					];
-				if (previous) {
-					const previousControls = previous.controls;
-					const previousNodePath = previousControls?.overrideId
-						? overrideIdsToNodePaths[previousControls.overrideId]
-						: undefined;
-					if (
-						!previousControls ||
-						!previousNodePath ||
-						!canUpdateDurationInFrames({
-							propStatuses,
-							nodePath: previousNodePath,
-						})
-					) {
-						return null;
-					}
-
-					const previousRuntimeValues =
-						previousControls.runtimeValues.getSnapshot();
-					const previousPlaybackRate = getTrimPlaybackRate({
-						sequence: previous,
-						runtimeValues: previousRuntimeValues,
-					});
-					rollingPrevious = {
-						fileName: previousNodePath.absolutePath,
-						// The preceding clip may have moved via a drag override before
-						// its runtime snapshot catches up with the saved source edit.
-						initialDuration: previous.duration,
-						minimumDuration: 1,
-						nodePath: previousNodePath,
-						playbackRate: previousPlaybackRate,
-						schema: previousControls.schema,
-					};
-				}
-			}
-
 			targets.set(key, {
 				parentPlaybackRate: getParentSequencePlaybackRate(
 					originalSequence,
@@ -1144,7 +1134,7 @@ export const getTimelineSequenceLeftEdgeDragTargets = ({
 				nodePath,
 				playbackRate,
 				positionField,
-				rollingPrevious,
+				ripplePrevious,
 				schema: controls.schema,
 			});
 		}
@@ -1324,8 +1314,8 @@ const clearLeftEdgeDragOverrides = ({
 }) => {
 	for (const target of targets) {
 		clearDragOverrides(target.nodePath);
-		if (target.rollingPrevious) {
-			clearDragOverrides(target.rollingPrevious.nodePath);
+		if (target.ripplePrevious) {
+			clearDragOverrides(target.ripplePrevious.nodePath);
 		}
 	}
 };
@@ -1574,6 +1564,7 @@ const TimelineSequenceLeftEdgeDragHandleInner: React.FC<{
 						sequences: sequencesRef.current,
 						overrideIdsToNodePaths: latestOverrideIdsToNodePaths,
 						propStatuses: propStatusesRef.current,
+						timelineDurationInFrames,
 						trimBeforeOnly,
 					}) ?? [])
 				: [];
@@ -1625,6 +1616,27 @@ const TimelineSequenceLeftEdgeDragHandleInner: React.FC<{
 				}
 
 				for (const target of dragState.targets) {
+					if (target.ripplePrevious && !dragState.trimBeforeOnly) {
+						const previous = target.ripplePrevious;
+						const nextDuration = getTimelineSequenceDurationDragValue({
+							initialDuration: previous.initialDuration,
+							deltaFrames: deltaFrames * previous.parentPlaybackRate,
+							maximumDuration: previous.maximumDuration,
+							minimumDuration: previous.minimumDuration,
+						});
+						latestRef.current.setDragOverrides(
+							previous.nodePath,
+							previous.endField.fieldKey,
+							Internals.makeStaticDragOverride(
+								getTimelineSequenceEndFieldValue({
+									endField: previous.endField,
+									durationInFrames: nextDuration,
+								}),
+							),
+						);
+						continue;
+					}
+
 					const nextValues = getTimelineSequenceLeftEdgeDragValues({
 						initialDuration: target.initialDuration,
 						initialFrom: target.initialFrom,
@@ -1632,25 +1644,8 @@ const TimelineSequenceLeftEdgeDragHandleInner: React.FC<{
 						deltaFrames: deltaFrames * target.parentPlaybackRate,
 						playbackRate: target.playbackRate,
 						minimumDuration: target.minimumDuration,
-						minimumDeltaFrames: target.rollingPrevious
-							? target.rollingPrevious.minimumDuration -
-								target.rollingPrevious.initialDuration
-							: -Infinity,
 						trimBeforeOnly: dragState.trimBeforeOnly,
 					});
-					if (target.rollingPrevious && !dragState.trimBeforeOnly) {
-						const previous = target.rollingPrevious;
-						latestRef.current.setDragOverrides(
-							previous.nodePath,
-							'durationInFrames',
-							Internals.makeStaticDragOverride(
-								(previous.initialDuration +
-									target.initialDuration -
-									nextValues.durationInFrames) *
-									previous.playbackRate,
-							),
-						);
-					}
 
 					if (!dragState.trimBeforeOnly && target.positionField !== null) {
 						latestRef.current.setDragOverrides(
@@ -1678,27 +1673,37 @@ const TimelineSequenceLeftEdgeDragHandleInner: React.FC<{
 				}
 
 				if (dragState.didMove && draggedTarget) {
-					const values = getTimelineSequenceLeftEdgeDragValues({
-						initialDuration: draggedTarget.initialDuration,
-						initialFrom: draggedTarget.initialFrom,
-						initialTrimBefore: draggedTarget.initialTrimBefore,
-						deltaFrames,
-						playbackRate: draggedTarget.playbackRate,
-						minimumDuration: draggedTarget.minimumDuration,
-						minimumDeltaFrames: draggedTarget.rollingPrevious
-							? draggedTarget.rollingPrevious.minimumDuration -
-								draggedTarget.rollingPrevious.initialDuration
-							: -Infinity,
-						trimBeforeOnly: dragState.trimBeforeOnly,
-					});
-					const appliedDelta = dragState.trimBeforeOnly
-						? (values.trimBefore - draggedTarget.initialTrimBefore) /
-							draggedTarget.playbackRate
-						: values.from - draggedTarget.initialFrom;
+					const {ripplePrevious} = draggedTarget;
+					let appliedDelta: number;
+					if (ripplePrevious) {
+						const nextDuration = getTimelineSequenceDurationDragValue({
+							initialDuration: ripplePrevious.initialDuration,
+							deltaFrames: deltaFrames * ripplePrevious.parentPlaybackRate,
+							maximumDuration: ripplePrevious.maximumDuration,
+							minimumDuration: ripplePrevious.minimumDuration,
+						});
+						appliedDelta =
+							(nextDuration - ripplePrevious.initialDuration) /
+							ripplePrevious.parentPlaybackRate;
+					} else {
+						const values = getTimelineSequenceLeftEdgeDragValues({
+							initialDuration: draggedTarget.initialDuration,
+							initialFrom: draggedTarget.initialFrom,
+							initialTrimBefore: draggedTarget.initialTrimBefore,
+							deltaFrames,
+							playbackRate: draggedTarget.playbackRate,
+							minimumDuration: draggedTarget.minimumDuration,
+							trimBeforeOnly: dragState.trimBeforeOnly,
+						});
+						appliedDelta = dragState.trimBeforeOnly
+							? (values.trimBefore - draggedTarget.initialTrimBefore) /
+								draggedTarget.playbackRate
+							: values.from - draggedTarget.initialFrom;
+					}
+
 					const edgeDelta =
 						dragState.trimBeforeOnly ||
-						(draggedTarget.positionField === null &&
-							draggedTarget.rollingPrevious === null)
+						(draggedTarget.positionField === null && ripplePrevious === null)
 							? 0
 							: appliedDelta;
 					setTrimTooltip({

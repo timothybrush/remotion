@@ -521,29 +521,40 @@ const TimelineSequenceInner: React.FC<{
 	const [activeTrimEdge, setActiveTrimEdge] = useState<'left' | 'right' | null>(
 		null,
 	);
+	const adjacentSeriesSequences = useMemo(() => {
+		if (
+			s.controls?.componentIdentity !== 'dev.remotion.remotion.Series.Sequence'
+		) {
+			return {previous: null, next: null};
+		}
+
+		const siblings = sortItemsByCommitOrder(
+			sequences.filter(
+				(candidate) =>
+					candidate.parent === s.parent &&
+					candidate.controls?.componentIdentity ===
+						'dev.remotion.remotion.Series.Sequence',
+			),
+			(candidate) => candidate.timelineOrder,
+		);
+		const index = siblings.findIndex((candidate) => candidate.id === s.id);
+		return {
+			previous: siblings[index - 1] ?? null,
+			next: siblings[index + 1] ?? null,
+		};
+	}, [s.controls?.componentIdentity, s.id, s.parent, sequences]);
 	const startEdgeDrag = useCallback(
 		(edge: 'left' | 'right', trimBeforeOnly: boolean) => {
 			setActiveTrimEdge(edge);
-			if (
-				trimBeforeOnly ||
-				s.controls?.componentIdentity !==
-					'dev.remotion.remotion.Series.Sequence'
-			) {
+			if (trimBeforeOnly) {
 				rippleEditHighlight?.setHighlight(null);
 				return;
 			}
 
-			const siblings = sortItemsByCommitOrder(
-				sequences.filter(
-					(candidate) =>
-						candidate.parent === s.parent &&
-						candidate.controls?.componentIdentity ===
-							'dev.remotion.remotion.Series.Sequence',
-				),
-				(candidate) => candidate.timelineOrder,
-			);
-			const index = siblings.findIndex((candidate) => candidate.id === s.id);
-			const adjacent = siblings[index + (edge === 'left' ? -1 : 1)];
+			const adjacent =
+				edge === 'left'
+					? adjacentSeriesSequences.previous
+					: adjacentSeriesSequences.next;
 			rippleEditHighlight?.setHighlight(
 				adjacent
 					? {
@@ -553,13 +564,7 @@ const TimelineSequenceInner: React.FC<{
 					: null,
 			);
 		},
-		[
-			rippleEditHighlight,
-			s.controls?.componentIdentity,
-			s.id,
-			s.parent,
-			sequences,
-		],
+		[adjacentSeriesSequences, rippleEditHighlight],
 	);
 	const startLeftEdgeDrag = useCallback(
 		(trimBeforeOnly: boolean) => startEdgeDrag('left', trimBeforeOnly),
@@ -684,6 +689,18 @@ const TimelineSequenceInner: React.FC<{
 	const trimBeforeCanUpdate = Boolean(
 		isStudioInteractivityEnabled() &&
 		propStatusesForOverride?.trimBefore?.status === 'static',
+	);
+	const previousSeriesNodePath = adjacentSeriesSequences.previous?.controls
+		?.overrideId
+		? overrideIdToNodePathMappingsRef.current[
+				adjacentSeriesSequences.previous.controls.overrideId
+			]
+		: null;
+	const previousSeriesCanResize = Boolean(
+		isStudioInteractivityEnabled() &&
+		previousSeriesNodePath &&
+		Internals.getPropStatusesCtx(propStatuses, previousSeriesNodePath)
+			?.durationInFrames?.status === 'static',
 	);
 	const {previewServerState} = useContext(StudioServerConnectionCtx);
 	const previewConnected = previewServerState.type === 'connected';
@@ -1192,9 +1209,11 @@ const TimelineSequenceInner: React.FC<{
 		isTimelineSequenceLeftEdgeDraggable(s) &&
 		nodePath !== null &&
 		validatedLocation !== null &&
-		(isCascadingSequence(s) || fromCanUpdate) &&
-		durationCanUpdate &&
-		trimBeforeCanUpdate;
+		(adjacentSeriesSequences.previous
+			? previousSeriesCanResize
+			: (isCascadingSequence(s) || fromCanUpdate) &&
+				durationCanUpdate &&
+				trimBeforeCanUpdate);
 	const showTrimBeforeDragHandle =
 		isMedia &&
 		isTimelineSequenceLeftEdgeDraggable(s) &&
