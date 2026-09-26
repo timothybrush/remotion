@@ -129,7 +129,6 @@ const AudioInner: React.FC<
 		trimBefore: props.trimBefore,
 		trimAfter: effectiveTrimAfter,
 		sequenceDurationInFrames,
-		mediaType: 'audio',
 		displayName: name ?? '<Audio>',
 		mediaVolume,
 		mediaStartsAt,

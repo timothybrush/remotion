@@ -307,7 +307,6 @@ const VideoInner: React.FC<
 		trimBefore,
 		trimAfter: effectiveTrimAfter,
 		sequenceDurationInFrames,
-		mediaType: 'video',
 		displayName: name ?? '<Video>',
 		mediaVolume,
 		mediaStartsAt,

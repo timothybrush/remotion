@@ -35,6 +35,7 @@ export const studioKeyboardShortcutActions = [
 	'selectOpacityProp',
 	'selectRotateProp',
 	'selectScaleProp',
+	'selectVolumeProp',
 	'duplicateSequences',
 	'splitSequences',
 	'copyEffectsAndValues',

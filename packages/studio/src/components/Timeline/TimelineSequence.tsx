@@ -1,5 +1,6 @@
 import {CanvasInternals} from '@remotion/canvas';
 import type {TimelineTrackData} from '@remotion/canvas';
+import type {WaveformVolume} from '@remotion/timeline-utils';
 import React, {
 	useCallback,
 	useContext,
@@ -53,12 +54,17 @@ import {
 	getSequenceContextMenuItems,
 } from './get-sequence-context-menu-items';
 import {getSequenceSplitMenuItem} from './get-sequence-split-menu-item';
+import {
+	getKeyframeDisplayOffset,
+	getKeyframePlaybackRate,
+} from './get-timeline-keyframes';
 import {getTimelineMediaStartFrame} from './get-timeline-media-start-frame';
 import {getTimelineSequenceVisibleLayout} from './get-timeline-sequence-visible-layout';
 import {getCurrentFrame} from './imperative-state';
 import {LoopedTimelineIndicator} from './LoopedTimelineIndicators';
 import {splitSelectedTimelineItems} from './split-selected-timeline-item';
 import {getTimelineAssetLinkInfo} from './timeline-asset-link';
+import {normalizeTimelineNumber} from './timeline-field-utils';
 import {timelineLeftEdgeCursor} from './timeline-left-edge-cursor';
 import {timelineRightEdgeCursor} from './timeline-right-edge-cursor';
 import {timelineRippleEdgeCursor} from './timeline-ripple-edge-cursor';
@@ -101,6 +107,8 @@ const TimelineSequenceFn: React.FC<{
 	readonly s: TimelineTrackData['sequence'];
 	readonly connectedCompositions: readonly _InternalTypes['AnyComposition'][];
 	readonly nodePathInfo: SequenceNodePathInfo | null;
+	readonly keyframeDisplayOffset: number;
+	readonly keyframePlaybackRate: number;
 	readonly sequenceFrameOffset: number;
 	readonly cascadedStart: number;
 	readonly localStart: number;
@@ -108,6 +116,8 @@ const TimelineSequenceFn: React.FC<{
 	s,
 	connectedCompositions,
 	nodePathInfo,
+	keyframeDisplayOffset,
+	keyframePlaybackRate,
 	sequenceFrameOffset,
 	cascadedStart,
 	localStart,
@@ -124,6 +134,8 @@ const TimelineSequenceFn: React.FC<{
 			s={s}
 			connectedCompositions={connectedCompositions}
 			nodePathInfo={nodePathInfo}
+			keyframeDisplayOffset={keyframeDisplayOffset}
+			keyframePlaybackRate={keyframePlaybackRate}
 			sequenceFrameOffset={sequenceFrameOffset}
 			cascadedStart={cascadedStart}
 			localStart={localStart}
@@ -460,6 +472,8 @@ const TimelineSequenceInner: React.FC<{
 	readonly connectedCompositions: readonly _InternalTypes['AnyComposition'][];
 	readonly windowWidth: number;
 	readonly nodePathInfo: SequenceNodePathInfo | null;
+	readonly keyframeDisplayOffset: number;
+	readonly keyframePlaybackRate: number;
 	readonly sequenceFrameOffset: number;
 	readonly cascadedStart: number;
 	readonly localStart: number;
@@ -468,6 +482,8 @@ const TimelineSequenceInner: React.FC<{
 	connectedCompositions,
 	windowWidth,
 	nodePathInfo,
+	keyframeDisplayOffset,
+	keyframePlaybackRate,
 	sequenceFrameOffset,
 	cascadedStart,
 	localStart,
@@ -571,12 +587,39 @@ const TimelineSequenceInner: React.FC<{
 	}, [originalLocation]);
 
 	const {propStatuses} = useContext(Internals.VisualModePropStatusesContext);
+	const {getDragOverrides} = useContext(
+		Internals.VisualModeDragOverridesContext,
+	);
 	const nodePath = nodePathInfo?.sequenceSubscriptionKey ?? null;
 	const propStatusesForOverride = useMemo(() => {
 		return nodePath
 			? Internals.getPropStatusesCtx(propStatuses, nodePath)
 			: undefined;
 	}, [propStatuses, nodePath]);
+	const volumeDragOverride = useMemo(
+		() => (nodePath ? getDragOverrides(nodePath).volume : undefined),
+		[getDragOverrides, nodePath],
+	);
+	const volumeKeyframeStatus = useMemo(() => {
+		if (volumeDragOverride?.type === 'keyframed') {
+			return {
+				...volumeDragOverride.status,
+				keyframes: volumeDragOverride.status.keyframes.map((keyframe) => ({
+					...keyframe,
+					// Fractional frames are valid. Only remove floating-point noise
+					// from the transient values before drawing the curve.
+					value:
+						typeof keyframe.value === 'number'
+							? normalizeTimelineNumber(keyframe.value)
+							: keyframe.value,
+				})),
+			};
+		}
+
+		return propStatusesForOverride?.volume?.status === 'keyframed'
+			? propStatusesForOverride.volume
+			: null;
+	}, [propStatusesForOverride?.volume, volumeDragOverride]);
 	const durationCanUpdate = Boolean(
 		isStudioInteractivityEnabled() &&
 		propStatusesForOverride?.durationInFrames?.status === 'static',
@@ -929,6 +972,61 @@ const TimelineSequenceInner: React.FC<{
 	const displayDurationInFrames = s.loopDisplay
 		? s.loopDisplay.durationInFrames * s.loopDisplay.numberOfTimes
 		: s.duration;
+	const registeredVolumeValue =
+		s.type === 'audio' || s.type === 'video' ? s.volume : 1;
+	const registeredVolume = useMemo((): WaveformVolume => {
+		return typeof registeredVolumeValue === 'number'
+			? registeredVolumeValue
+			: registeredVolumeValue.split(',').map((value) => Number(value));
+	}, [registeredVolumeValue]);
+	const keyframedTimelineVolume = useMemo((): readonly number[] | null => {
+		if (volumeKeyframeStatus === null) {
+			return null;
+		}
+
+		if (
+			!Number.isFinite(displayDurationInFrames) ||
+			displayDurationInFrames <= 0
+		) {
+			return [];
+		}
+
+		const resolvedDisplayOffset = getKeyframeDisplayOffset({
+			propStatus: volumeKeyframeStatus,
+			keyframeDisplayOffset,
+			keyframePlaybackRate,
+		});
+		const resolvedPlaybackRate = getKeyframePlaybackRate(
+			volumeKeyframeStatus,
+			keyframePlaybackRate,
+		);
+		const firstDisplayFrame = s.from + (s.loopDisplay?.startOffset ?? 0);
+		const curve: number[] = [];
+		for (let index = 0; index < Math.ceil(displayDurationInFrames); index++) {
+			const value = Internals.interpolateKeyframedStatus({
+				forceSpringAllowTail: null,
+				frame:
+					(firstDisplayFrame + index - resolvedDisplayOffset) *
+					resolvedPlaybackRate,
+				status: volumeKeyframeStatus,
+			});
+			if (typeof value !== 'number' || !Number.isFinite(value)) {
+				return null;
+			}
+
+			curve.push(Math.max(0, value));
+		}
+
+		return curve;
+	}, [
+		displayDurationInFrames,
+		keyframeDisplayOffset,
+		keyframePlaybackRate,
+		s.from,
+		s.loopDisplay?.startOffset,
+		volumeKeyframeStatus,
+	]);
+	const timelineVolume = keyframedTimelineVolume ?? registeredVolume;
 
 	const {
 		marginLeft,
@@ -1211,14 +1309,13 @@ const TimelineSequenceInner: React.FC<{
 					<AudioWaveform
 						src={s.src}
 						height={TIMELINE_LAYER_HEIGHT_AUDIO}
-						doesVolumeChange={s.doesVolumeChange}
 						muted={s.muted}
 						visualizationWidth={visibleLayout.media.width}
 						startFrom={mediaLoopStartFrame}
 						durationInFrames={s.duration}
 						displayOffsetInFrames={mediaDisplayOffsetInFrames}
 						displayDurationInFrames={mediaDisplayDurationInFrames}
-						volume={s.volume}
+						volume={timelineVolume}
 						playbackRate={s.playbackRate * s.sequencePlaybackRate}
 						loopDisplay={s.loopDisplay}
 						loopDisplayOffsetInFrames={s.loopDisplay?.phaseOffsetInFrames ?? 0}
@@ -1235,9 +1332,8 @@ const TimelineSequenceInner: React.FC<{
 					mediaFrameAtSequenceZero={mediaLoopStartFrame}
 					sequenceFrameOffset={0}
 					playbackRate={s.playbackRate * s.sequencePlaybackRate}
-					volume={s.volume}
+					volume={timelineVolume}
 					muted={s.muted}
-					doesVolumeChange={s.doesVolumeChange}
 					marginLeft={visibleLayout.media.left}
 					loopDisplay={s.loopDisplay}
 					loopDisplayOffsetInFrames={s.loopDisplay?.phaseOffsetInFrames ?? 0}

@@ -28,6 +28,7 @@ const sequencePropShortcuts = [
 	{action: 'selectRotateProp', fieldKey: 'style.rotate'},
 	{action: 'selectScaleProp', fieldKey: 'style.scale'},
 	{action: 'selectOpacityProp', fieldKey: 'style.opacity'},
+	{action: 'selectVolumeProp', fieldKey: 'volume'},
 ] as const satisfies readonly {
 	readonly action: StudioKeyboardShortcutAction;
 	readonly fieldKey: string;

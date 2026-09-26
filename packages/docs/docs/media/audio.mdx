@@ -131,13 +131,15 @@ export const MyVideo = () => {
 ```
 
 ```tsx twoslash title="Changing the volume over time"
-import {AbsoluteFill, interpolate, staticFile} from 'remotion';
+import {AbsoluteFill, interpolate, staticFile, useCurrentFrame} from 'remotion';
 import {Audio} from '@remotion/media';
 
 export const MyVideo = () => {
+  const frame = useCurrentFrame();
+
   return (
     <AbsoluteFill>
-      <Audio volume={(f) => interpolate(f, [0, 30], [0, 1], {extrapolateLeft: 'clamp'})} src={staticFile('voice.mp3')} />
+      <Audio volume={interpolate(frame, [0, 30], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})} src={staticFile('voice.mp3')} />
     </AbsoluteFill>
   );
 };
