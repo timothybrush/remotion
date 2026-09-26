@@ -60,8 +60,7 @@ import {LoopedTimelineIndicator} from './LoopedTimelineIndicators';
 import {splitSelectedTimelineItems} from './split-selected-timeline-item';
 import {getTimelineAssetLinkInfo} from './timeline-asset-link';
 import {timelineLeftEdgeCursor} from './timeline-left-edge-cursor';
-import {timelineRightEdgeCursor} from './timeline-right-edge-cursor';
-import {timelineRippleEdgeCursor} from './timeline-ripple-edge-cursor';
+import {timelineTrimEdgeCursor} from './timeline-trim-edge-cursor';
 import {TimelineImageInfo} from './TimelineImageInfo';
 import {
 	getTimelineSequenceSelectionKey,
@@ -93,9 +92,38 @@ import {useDeleteTimelineItems} from './use-delete-timeline-items';
 import {useOpenSequenceInApps} from './use-open-sequence-in-apps';
 import {getSequenceFreezeFrameMenuItem} from './use-sequence-freeze-frame-menu-item';
 
-const {getTimelineVisibleDuration, getTimelineVisibleStart} = CanvasInternals;
+const {
+	getTimelineVisibleDuration,
+	getTimelineVisibleStart,
+	sortItemsByCommitOrder,
+} = CanvasInternals;
 const NEGATIVE_START_BORDER_WIDTH = 1;
 const EDGE_DRAG_HIGHLIGHT_WIDTH = 12;
+
+type RippleEditHighlight = {
+	readonly sequenceId: TSequence['id'];
+	readonly edge: 'left' | 'right';
+};
+
+const TimelineRippleEditHighlightContext = React.createContext<{
+	readonly highlight: RippleEditHighlight | null;
+	readonly setHighlight: React.Dispatch<
+		React.SetStateAction<RippleEditHighlight | null>
+	>;
+} | null>(null);
+
+export const TimelineRippleEditHighlightProvider: React.FC<{
+	readonly children: React.ReactNode;
+}> = ({children}) => {
+	const [highlight, setHighlight] = useState<RippleEditHighlight | null>(null);
+	const value = useMemo(() => ({highlight, setHighlight}), [highlight]);
+
+	return (
+		<TimelineRippleEditHighlightContext.Provider value={value}>
+			{children}
+		</TimelineRippleEditHighlightContext.Provider>
+	);
+};
 
 const TimelineSequenceFn: React.FC<{
 	readonly s: TimelineTrackData['sequence'];
@@ -485,6 +513,7 @@ const TimelineSequenceInner: React.FC<{
 	const mediaDurationDragLimitsRegistry = useContext(
 		TimelineSequenceMediaDurationDragLimitsContext,
 	);
+	const rippleEditHighlight = useContext(TimelineRippleEditHighlightContext);
 	const dragAwareDoubleClick = useMemo(
 		() => createDragAwareDoubleClickTracker(),
 		[],
@@ -492,14 +521,61 @@ const TimelineSequenceInner: React.FC<{
 	const [activeTrimEdge, setActiveTrimEdge] = useState<'left' | 'right' | null>(
 		null,
 	);
-	const startLeftEdgeDrag = useCallback(() => setActiveTrimEdge('left'), []);
-	const startRightEdgeDrag = useCallback(() => setActiveTrimEdge('right'), []);
+	const startEdgeDrag = useCallback(
+		(edge: 'left' | 'right', trimBeforeOnly: boolean) => {
+			setActiveTrimEdge(edge);
+			if (
+				trimBeforeOnly ||
+				s.controls?.componentIdentity !==
+					'dev.remotion.remotion.Series.Sequence'
+			) {
+				rippleEditHighlight?.setHighlight(null);
+				return;
+			}
+
+			const siblings = sortItemsByCommitOrder(
+				sequences.filter(
+					(candidate) =>
+						candidate.parent === s.parent &&
+						candidate.controls?.componentIdentity ===
+							'dev.remotion.remotion.Series.Sequence',
+				),
+				(candidate) => candidate.timelineOrder,
+			);
+			const index = siblings.findIndex((candidate) => candidate.id === s.id);
+			const adjacent = siblings[index + (edge === 'left' ? -1 : 1)];
+			rippleEditHighlight?.setHighlight(
+				adjacent
+					? {
+							sequenceId: adjacent.id,
+							edge: edge === 'left' ? 'right' : 'left',
+						}
+					: null,
+			);
+		},
+		[
+			rippleEditHighlight,
+			s.controls?.componentIdentity,
+			s.id,
+			s.parent,
+			sequences,
+		],
+	);
+	const startLeftEdgeDrag = useCallback(
+		(trimBeforeOnly: boolean) => startEdgeDrag('left', trimBeforeOnly),
+		[startEdgeDrag],
+	);
+	const startRightEdgeDrag = useCallback(
+		() => startEdgeDrag('right', false),
+		[startEdgeDrag],
+	);
 	const endEdgeDrag = useCallback(
 		(wasDragged: boolean) => {
 			setActiveTrimEdge(null);
+			rippleEditHighlight?.setHighlight(null);
 			dragAwareDoubleClick.endPointerGesture(wasDragged);
 		},
-		[dragAwareDoubleClick],
+		[dragAwareDoubleClick, rippleEditHighlight],
 	);
 
 	const mediaMetadata = useMediaMetadata(
@@ -1119,6 +1195,12 @@ const TimelineSequenceInner: React.FC<{
 		(isCascadingSequence(s) || fromCanUpdate) &&
 		durationCanUpdate &&
 		trimBeforeCanUpdate;
+	const showTrimBeforeDragHandle =
+		isMedia &&
+		isTimelineSequenceLeftEdgeDraggable(s) &&
+		nodePath !== null &&
+		validatedLocation !== null &&
+		trimBeforeCanUpdate;
 
 	if ((maxMediaDuration === null && !s.loopDisplay) || visibleLayout === null) {
 		return null;
@@ -1136,7 +1218,12 @@ const TimelineSequenceInner: React.FC<{
 	const sequence = (
 		<TimelineSequenceCurrentFrame
 			s={s}
-			activeTrimEdge={activeTrimEdge}
+			activeTrimEdge={
+				activeTrimEdge ??
+				(rippleEditHighlight?.highlight?.sequenceId === s.id
+					? rippleEditHighlight.highlight.edge
+					: null)
+			}
 			displayDurationInFrames={displayDurationInFrames}
 			premount={visibleLayout.premount}
 			postmount={visibleLayout.postmount}
@@ -1153,13 +1240,16 @@ const TimelineSequenceInner: React.FC<{
 			onClick={canHandleSequenceDoubleClick ? onSequenceClick : null}
 			edgeDragHandles={
 				<>
-					{showLeftEdgeDragHandle &&
+					{(showLeftEdgeDragHandle || showTrimBeforeDragHandle) &&
 					visibleLayout.leftEdgeVisible &&
 					negativeStartWidth === 0 &&
 					nodePathInfo &&
 					validatedLocation ? (
 						<TimelineSequenceLeftEdgeDragHandle
-							cursor={`${timelineLeftEdgeCursor}, e-resize`}
+							cursor={`${timelineTrimEdgeCursor}, ew-resize`}
+							trimBeforeCursor={`${timelineLeftEdgeCursor}, e-resize`}
+							edgeEnabled={showLeftEdgeDragHandle}
+							trimBeforeEnabled={showTrimBeforeDragHandle}
 							nodePathInfo={nodePathInfo}
 							windowWidth={windowWidth}
 							timelineDurationInFrames={video.durationInFrames ?? 1}
@@ -1176,11 +1266,7 @@ const TimelineSequenceInner: React.FC<{
 					nodePathInfo &&
 					validatedLocation ? (
 						<TimelineSequenceRightEdgeDragHandle
-							cursor={
-								isCascadingSequence(s)
-									? `${timelineRippleEdgeCursor}, ew-resize`
-									: `${timelineRightEdgeCursor}, w-resize`
-							}
+							cursor={`${timelineTrimEdgeCursor}, ew-resize`}
 							nodePathInfo={nodePathInfo}
 							mediaDurationDragLimits={mediaDurationDragLimits}
 							windowWidth={windowWidth}
