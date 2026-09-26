@@ -2432,6 +2432,7 @@ test('Timeline duration drag clamps each selected sequence to one frame', () => 
 
 test('TransitionSeries.Sequence resize clamps to adjacent transition durations', () => {
 	const schema = {} satisfies InteractivitySchema;
+	const firstNodePathInfo = makeNodePathInfo(['body', 0], []);
 	const nodePathInfo = makeNodePathInfo(['body', 2], []);
 	const transitionSeriesSequence = (
 		id: string,
@@ -2465,10 +2466,14 @@ test('TransitionSeries.Sequence resize clamps to adjacent transition durations',
 		transition('next-transition', 12, 3),
 	];
 	const propStatuses = makeLeftEdgePropStatuses(
-		[nodePathInfo.sequenceSubscriptionKey],
+		[
+			firstNodePathInfo.sequenceSubscriptionKey,
+			nodePathInfo.sequenceSubscriptionKey,
+		],
 		true,
 	);
 	const overrideIdsToNodePaths = {
+		first: firstNodePathInfo.sequenceSubscriptionKey,
 		target: nodePathInfo.sequenceSubscriptionKey,
 	};
 	const selectedItems = [{type: 'sequence' as const, nodePathInfo}];
@@ -2499,16 +2504,13 @@ test('TransitionSeries.Sequence resize clamps to adjacent transition durations',
 		propStatuses,
 	});
 
-	expect(leftEdgeTargets?.[0].minimumDuration).toBe(12);
+	expect(leftEdgeTargets?.[0].ripplePrevious?.minimumDuration).toBe(8);
 	expect(
 		getTimelineSequenceLeftEdgeDragChanges({
 			targets: leftEdgeTargets ?? [],
-			deltaFrames: 100,
+			deltaFrames: -100,
 		}).map((change) => [change.fieldKey, change.value]),
-	).toEqual([
-		['durationInFrames', 12],
-		['trimBefore', 28],
-	]);
+	).toEqual([['durationInFrames', 8]]);
 });
 
 test('Timeline duration drag is blocked if one selected sequence cannot update duration', () => {
@@ -2735,7 +2737,7 @@ test('Timeline left edge drag adjusts from, duration and trimBefore for selected
 	]);
 });
 
-test('TransitionSeries.Sequence left edge drag leaves its calculated position unchanged', () => {
+test('TransitionSeries.Sequence self-trim changes its duration and trimBefore', () => {
 	const schema = {} satisfies InteractivitySchema;
 	const nodePathInfo = makeNodePathInfo(['body', 0], []);
 	const subscriptionKey = nodePathInfo.sequenceSubscriptionKey;
@@ -2773,6 +2775,7 @@ test('TransitionSeries.Sequence left edge drag leaves its calculated position un
 				effects: [],
 			},
 		},
+		rippleEdit: false,
 	});
 
 	expect(targets?.[0]).toMatchObject({
@@ -2792,7 +2795,7 @@ test('TransitionSeries.Sequence left edge drag leaves its calculated position un
 	]);
 });
 
-test('Series.Sequence left edge drag leaves its calculated position unchanged', () => {
+test('Series.Sequence self-trim changes its duration and trimBefore', () => {
 	const schema = {} satisfies InteractivitySchema;
 	const nodePathInfo = makeNodePathInfo(['body', 0], []);
 	const subscriptionKey = nodePathInfo.sequenceSubscriptionKey;
@@ -2830,6 +2833,7 @@ test('Series.Sequence left edge drag leaves its calculated position unchanged', 
 				effects: [],
 			},
 		},
+		rippleEdit: false,
 	});
 
 	expect(targets?.[0]).toMatchObject({

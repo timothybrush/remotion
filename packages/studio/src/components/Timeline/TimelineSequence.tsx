@@ -99,6 +99,7 @@ const {
 } = CanvasInternals;
 const NEGATIVE_START_BORDER_WIDTH = 1;
 const EDGE_DRAG_HIGHLIGHT_WIDTH = 12;
+const MIN_SECONDARY_LEFT_EDGE_ACTION_WIDTH = 32;
 
 type RippleEditHighlight = {
 	readonly sequenceId: TSequence['id'];
@@ -521,10 +522,11 @@ const TimelineSequenceInner: React.FC<{
 	const [activeTrimEdge, setActiveTrimEdge] = useState<'left' | 'right' | null>(
 		null,
 	);
-	const adjacentSeriesSequences = useMemo(() => {
-		if (
-			s.controls?.componentIdentity !== 'dev.remotion.remotion.Series.Sequence'
-		) {
+	const cascadingSequenceComponentIdentity = isCascadingSequence(s)
+		? s.controls?.componentIdentity
+		: null;
+	const adjacentCascadingSequences = useMemo(() => {
+		if (!cascadingSequenceComponentIdentity) {
 			return {previous: null, next: null};
 		}
 
@@ -533,7 +535,7 @@ const TimelineSequenceInner: React.FC<{
 				(candidate) =>
 					candidate.parent === s.parent &&
 					candidate.controls?.componentIdentity ===
-						'dev.remotion.remotion.Series.Sequence',
+						cascadingSequenceComponentIdentity,
 			),
 			(candidate) => candidate.timelineOrder,
 		);
@@ -542,19 +544,19 @@ const TimelineSequenceInner: React.FC<{
 			previous: siblings[index - 1] ?? null,
 			next: siblings[index + 1] ?? null,
 		};
-	}, [s.controls?.componentIdentity, s.id, s.parent, sequences]);
+	}, [cascadingSequenceComponentIdentity, s.id, s.parent, sequences]);
 	const startEdgeDrag = useCallback(
-		(edge: 'left' | 'right', trimBeforeOnly: boolean) => {
+		(edge: 'left' | 'right', highlightAdjacent: boolean) => {
 			setActiveTrimEdge(edge);
-			if (trimBeforeOnly) {
+			if (!highlightAdjacent) {
 				rippleEditHighlight?.setHighlight(null);
 				return;
 			}
 
 			const adjacent =
 				edge === 'left'
-					? adjacentSeriesSequences.previous
-					: adjacentSeriesSequences.next;
+					? adjacentCascadingSequences.previous
+					: adjacentCascadingSequences.next;
 			rippleEditHighlight?.setHighlight(
 				adjacent
 					? {
@@ -564,14 +566,15 @@ const TimelineSequenceInner: React.FC<{
 					: null,
 			);
 		},
-		[adjacentSeriesSequences, rippleEditHighlight],
+		[adjacentCascadingSequences, rippleEditHighlight],
 	);
 	const startLeftEdgeDrag = useCallback(
-		(trimBeforeOnly: boolean) => startEdgeDrag('left', trimBeforeOnly),
+		(mode: 'ripple' | 'source-only' | 'self-trim') =>
+			startEdgeDrag('left', mode === 'ripple'),
 		[startEdgeDrag],
 	);
 	const startRightEdgeDrag = useCallback(
-		() => startEdgeDrag('right', false),
+		() => startEdgeDrag('right', true),
 		[startEdgeDrag],
 	);
 	const endEdgeDrag = useCallback(
@@ -690,17 +693,19 @@ const TimelineSequenceInner: React.FC<{
 		isStudioInteractivityEnabled() &&
 		propStatusesForOverride?.trimBefore?.status === 'static',
 	);
-	const previousSeriesNodePath = adjacentSeriesSequences.previous?.controls
-		?.overrideId
+	const previousCascadingSequenceNodePath = adjacentCascadingSequences.previous
+		?.controls?.overrideId
 		? overrideIdToNodePathMappingsRef.current[
-				adjacentSeriesSequences.previous.controls.overrideId
+				adjacentCascadingSequences.previous.controls.overrideId
 			]
 		: null;
-	const previousSeriesCanResize = Boolean(
+	const previousCascadingSequenceCanResize = Boolean(
 		isStudioInteractivityEnabled() &&
-		previousSeriesNodePath &&
-		Internals.getPropStatusesCtx(propStatuses, previousSeriesNodePath)
-			?.durationInFrames?.status === 'static',
+		previousCascadingSequenceNodePath &&
+		Internals.getPropStatusesCtx(
+			propStatuses,
+			previousCascadingSequenceNodePath,
+		)?.durationInFrames?.status === 'static',
 	);
 	const {previewServerState} = useContext(StudioServerConnectionCtx);
 	const previewConnected = previewServerState.type === 'connected';
@@ -1209,17 +1214,24 @@ const TimelineSequenceInner: React.FC<{
 		isTimelineSequenceLeftEdgeDraggable(s) &&
 		nodePath !== null &&
 		validatedLocation !== null &&
-		(adjacentSeriesSequences.previous
-			? previousSeriesCanResize
+		(adjacentCascadingSequences.previous
+			? previousCascadingSequenceCanResize
 			: (isCascadingSequence(s) || fromCanUpdate) &&
 				durationCanUpdate &&
 				trimBeforeCanUpdate);
-	const showTrimBeforeDragHandle =
-		isMedia &&
+	const canShowSecondaryLeftEdgeAction =
+		(isMedia || isCascadingSequence(s)) &&
 		isTimelineSequenceLeftEdgeDraggable(s) &&
 		nodePath !== null &&
 		validatedLocation !== null &&
-		trimBeforeCanUpdate;
+		trimBeforeCanUpdate &&
+		(isMedia || durationCanUpdate) &&
+		(visibleLayout?.width ?? 0) >= MIN_SECONDARY_LEFT_EDGE_ACTION_WIDTH;
+	const secondaryLeftEdgeAction = canShowSecondaryLeftEdgeAction
+		? isMedia
+			? 'source-only'
+			: 'self-trim'
+		: null;
 
 	if ((maxMediaDuration === null && !s.loopDisplay) || visibleLayout === null) {
 		return null;
@@ -1259,7 +1271,7 @@ const TimelineSequenceInner: React.FC<{
 			onClick={canHandleSequenceDoubleClick ? onSequenceClick : null}
 			edgeDragHandles={
 				<>
-					{(showLeftEdgeDragHandle || showTrimBeforeDragHandle) &&
+					{(showLeftEdgeDragHandle || secondaryLeftEdgeAction) &&
 					visibleLayout.leftEdgeVisible &&
 					negativeStartWidth === 0 &&
 					nodePathInfo &&
@@ -1268,7 +1280,7 @@ const TimelineSequenceInner: React.FC<{
 							cursor={`${timelineTrimEdgeCursor}, ew-resize`}
 							trimBeforeCursor={`${timelineLeftEdgeCursor}, e-resize`}
 							edgeEnabled={showLeftEdgeDragHandle}
-							trimBeforeEnabled={showTrimBeforeDragHandle}
+							secondaryAction={secondaryLeftEdgeAction}
 							nodePathInfo={nodePathInfo}
 							windowWidth={windowWidth}
 							timelineDurationInFrames={video.durationInFrames ?? 1}
